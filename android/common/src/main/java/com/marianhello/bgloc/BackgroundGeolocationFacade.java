@@ -54,8 +54,7 @@ public class BackgroundGeolocationFacade {
 
     public static final String[] PERMISSIONS = {
             Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACTIVITY_RECOGNITION
+            Manifest.permission.ACCESS_FINE_LOCATION
     };
 
     private boolean mServiceBroadcastReceiverRegistered = false;
@@ -214,9 +213,13 @@ public class BackgroundGeolocationFacade {
 
     public void start() {
         logger.debug("Starting service");
+        String[] permissions = PERMISSIONS;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions[2] = Manifest.permission.ACTIVITY_RECOGNITION;
+        }
 
         PermissionManager permissionManager = PermissionManager.getInstance(getContext());
-        permissionManager.checkPermissions(Arrays.asList(PERMISSIONS), new PermissionManager.PermissionRequestListener() {
+        permissionManager.checkPermissions(Arrays.asList(permissions), new PermissionManager.PermissionRequestListener() {
             @Override
             public void onPermissionGranted() {
                 logger.info("User granted requested permissions");
@@ -229,6 +232,11 @@ public class BackgroundGeolocationFacade {
             @Override
             public void onPermissionDenied() {
                 logger.info("User denied requested permissions");
+                if (ContextCompat.checkSelfPermission(mContext, Manifest.permission.ACTIVITY_RECOGNITION)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    int stop = 0;
+                    // Permission is not granted
+                }
                 if (mDelegate != null) {
                     mDelegate.onAuthorizationChanged(BackgroundGeolocationFacade.AUTHORIZATION_DENIED);
                 }

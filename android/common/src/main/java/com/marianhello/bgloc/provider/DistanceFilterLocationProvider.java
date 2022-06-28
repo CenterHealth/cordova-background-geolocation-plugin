@@ -25,10 +25,10 @@ import android.os.Build;
 import android.os.Bundle;
 
 import com.marianhello.bgloc.Config;
-import com.marianhello.bgloc.provider.AbstractLocationProvider;
 import com.marianhello.utils.ToneGenerator.Tone;
 
 import java.util.List;
+import java.util.Objects;
 
 import static java.lang.Math.abs;
 import static java.lang.Math.pow;
@@ -45,18 +45,18 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
     private static final String SINGLE_LOCATION_UPDATE_ACTION   = P_NAME + ".SINGLE_LOCATION_UPDATE_ACTION";
     private static final String STATIONARY_LOCATION_MONITOR_ACTION = P_NAME + ".STATIONARY_LOCATION_MONITOR_ACTION";
 
-    private static final long STATIONARY_TIMEOUT                                = 5 * 1000 * 60;    // 5 minutes.
-    private static final long STATIONARY_LOCATION_POLLING_INTERVAL_LAZY         = 3 * 1000 * 60;    // 3 minutes.
-    private static final long STATIONARY_LOCATION_POLLING_INTERVAL_AGGRESSIVE   = 1 * 1000 * 60;    // 1 minute.
-    private static final int MAX_STATIONARY_ACQUISITION_ATTEMPTS = 5;
+    private static final long STATIONARY_TIMEOUT                                = 1 * 1000 * 60;    // 5 minutes.
+    private static final long STATIONARY_LOCATION_POLLING_INTERVAL_LAZY         = 1 * 1000 * 60;    // 3 minutes.
+    private static final int MAX_STATIONARY_ACQUISITION_ATTEMPTS = 3;
     private static final int MAX_SPEED_ACQUISITION_ATTEMPTS = 3;
 
     private Boolean isMoving = false;
     private Boolean isAcquiringStationaryLocation = false;
     private Boolean isAcquiringSpeed = false;
     private Integer locationAcquisitionAttempts = 0;
+    private Boolean resettingStationaryRegion = false;
+    private Boolean isMonitoringStationary = false;
 
-    private Location lastLocation;
     private Location stationaryLocation;
     private float stationaryRadius;
     private PendingIntent stationaryAlarmPI;
@@ -165,6 +165,7 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
      * @param value set true to engage "aggressive", battery-consuming tracking, false for stationary-region tracking
      */
     private void setPace(Boolean value) {
+        logger.info("set pace called");
         if (!isStarted) {
             return;
         }
@@ -198,7 +199,7 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
                 // Turn on each provider aggressively for a short period of time
                 List<String> matchingProviders = locationManager.getAllProviders();
                 for (String provider: matchingProviders) {
-                    if (provider != LocationManager.PASSIVE_PROVIDER) {
+                    if (!Objects.equals(provider, LocationManager.PASSIVE_PROVIDER)) {
                         logger.info("Requesting location updates from provider {}", provider);
                         locationManager.requestLocationUpdates(provider, 0, 0, this);
                     }
@@ -291,7 +292,13 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
     public void onLocationChanged(Location location) {
         logger.debug("Location change: {} isMoving={}", location.toString(), isMoving);
 
-        if (!isMoving && !isAcquiringStationaryLocation && stationaryLocation==null) {
+        if (!isAcquiringStationaryLocation && !isAcquiringSpeed && !isMonitoringStationary) {
+            // if this method isn't called within period of time, stop location tracking
+            resetStationaryAlarm();
+        }
+
+        if (!isMoving && !isAcquiringStationaryLocation && !resettingStationaryRegion && stationaryLocation==null) {
+            logger.debug("calling setPace");
             // Perhaps our GPS signal was interupted, re-acquire a stationaryLocation now.
             setPace(false);
         }
@@ -327,7 +334,7 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
             playDebugTone(Tone.BEEP);
 
             // Only reset stationaryAlarm when accurate speed is detected, prevents spurious locations from resetting when stopped.
-            if ( (location.getSpeed() >= 1) && (location.getAccuracy() <= mConfig.getStationaryRadius()) ) {
+            if ( (location.getSpeed() >= 1) && (location.getAccuracy() <= mConfig.getStationaryRadius()) && !isMonitoringStationary ) {
                 resetStationaryAlarm();
             }
             // Calculate latest distanceFilter, if it changed by 5 m/s, we'll reconfigure our pace.
@@ -337,18 +344,15 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
                 scaledDistanceFilter = newDistanceFilter;
                 setPace(true);
             }
-            if (lastLocation != null && location.distanceTo(lastLocation) < mConfig.getDistanceFilter()) {
-                return;
-            }
         } else if (stationaryLocation != null) {
             return;
         }
         // Go ahead and cache, push to server
-        lastLocation = location;
         handleLocation(location);
     }
 
     public void resetStationaryAlarm() {
+        resettingStationaryRegion = true;
         alarmManager.cancel(stationaryAlarmPI);
         alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + STATIONARY_TIMEOUT, stationaryAlarmPI); // Millisec * Second * Minute
     }
@@ -364,6 +368,7 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
 
     private void startMonitoringStationaryRegion(Location location) {
         try {
+            isMonitoringStationary = true;
             locationManager.removeUpdates(this);
 
             float stationaryRadius = mConfig.getStationaryRadius();
@@ -401,6 +406,7 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
                 location.getLatitude(), location.getLongitude(), location.getAccuracy());
 
         try {
+            isMonitoringStationary = false;
             // Cancel the periodic stationary location monitor alarm.
             alarmManager.cancel(stationaryLocationPollingPI);
             // Kill the current region-monitor we just walked out of.
@@ -434,15 +440,12 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
             distance = abs(location.distanceTo(stationaryLocation) - stationaryLocation.getAccuracy() - location.getAccuracy());
         }
 
-        showDebugToast("Stationary exit in " + (stationaryRadius-distance) + "m");
-
         // TODO http://www.cse.buffalo.edu/~demirbas/publications/proximity.pdf
         // determine if we're almost out of stationary-distance and increase monitoring-rate.
         logger.info("Distance from stationary location: {}", distance);
         if (distance > stationaryRadius) {
-            onExitStationaryRegion(location);
-        } else if (distance > 0) {
-            startPollingStationaryLocation(STATIONARY_LOCATION_POLLING_INTERVAL_AGGRESSIVE);
+            showDebugToast("Stationary exit in " + (stationaryRadius-distance) + "m");
+            // onExitStationaryRegion(location);
         } else if (stationaryLocationPollingInterval != STATIONARY_LOCATION_POLLING_INTERVAL_LAZY) {
             startPollingStationaryLocation(STATIONARY_LOCATION_POLLING_INTERVAL_LAZY);
         }
@@ -456,7 +459,7 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
         public void onReceive(Context context, Intent intent) {
             String key = LocationManager.KEY_LOCATION_CHANGED;
             Location location = (Location)intent.getExtras().get(key);
-            if (location != null) {
+            if (location != null && isMonitoringStationary) {
                 logger.debug("Single location update: " + location.toString());
                 onPollStationaryLocation(location);
             }
@@ -471,7 +474,9 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
         public void onReceive(Context context, Intent intent)
         {
             logger.info("stationaryAlarm fired");
-            setPace(false);
+            if(!isMonitoringStationary) {
+                setPace(false);
+            }
         }
     };
 
