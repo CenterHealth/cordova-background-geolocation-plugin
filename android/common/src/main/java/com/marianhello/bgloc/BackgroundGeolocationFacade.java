@@ -41,8 +41,10 @@ import com.marianhello.logging.UncaughtExceptionLogger;
 import org.json.JSONException;
 import org.slf4j.event.Level;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 
 public class BackgroundGeolocationFacade {
@@ -213,13 +215,13 @@ public class BackgroundGeolocationFacade {
 
     public void start() {
         logger.debug("Starting service");
-        String[] permissions = PERMISSIONS;
+        List<String> permissions = new ArrayList<String>(Arrays.asList(PERMISSIONS));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            permissions[2] = Manifest.permission.ACTIVITY_RECOGNITION;
+            permissions.add(Manifest.permission.ACTIVITY_RECOGNITION);
         }
 
         PermissionManager permissionManager = PermissionManager.getInstance(getContext());
-        permissionManager.checkPermissions(Arrays.asList(permissions), new PermissionManager.PermissionRequestListener() {
+        permissionManager.checkPermissions(permissions, new PermissionManager.PermissionRequestListener() {
             @Override
             public void onPermissionGranted() {
                 logger.info("User granted requested permissions");
