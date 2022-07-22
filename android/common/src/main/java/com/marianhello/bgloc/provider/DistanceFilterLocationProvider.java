@@ -445,7 +445,7 @@ public class DistanceFilterLocationProvider extends AbstractLocationProvider imp
         logger.info("Distance from stationary location: {}", distance);
         if (distance > stationaryRadius) {
             showDebugToast("Stationary exit in " + (stationaryRadius-distance) + "m");
-            // onExitStationaryRegion(location);
+            onExitStationaryRegion(location);
         } else if (stationaryLocationPollingInterval != STATIONARY_LOCATION_POLLING_INTERVAL_LAZY) {
             startPollingStationaryLocation(STATIONARY_LOCATION_POLLING_INTERVAL_LAZY);
         }
