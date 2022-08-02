@@ -41,8 +41,10 @@ import com.marianhello.logging.UncaughtExceptionLogger;
 import org.json.JSONException;
 import org.slf4j.event.Level;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 
 public class BackgroundGeolocationFacade {
@@ -213,9 +215,13 @@ public class BackgroundGeolocationFacade {
 
     public void start() {
         logger.debug("Starting service");
+        List<String> permissions = new ArrayList<String>(Arrays.asList(PERMISSIONS));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.ACTIVITY_RECOGNITION);
+        }
 
         PermissionManager permissionManager = PermissionManager.getInstance(getContext());
-        permissionManager.checkPermissions(Arrays.asList(PERMISSIONS), new PermissionManager.PermissionRequestListener() {
+        permissionManager.checkPermissions(permissions, new PermissionManager.PermissionRequestListener() {
             @Override
             public void onPermissionGranted() {
                 logger.info("User granted requested permissions");
@@ -228,6 +234,11 @@ public class BackgroundGeolocationFacade {
             @Override
             public void onPermissionDenied() {
                 logger.info("User denied requested permissions");
+                if (ContextCompat.checkSelfPermission(mContext, Manifest.permission.ACTIVITY_RECOGNITION)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    int stop = 0;
+                    // Permission is not granted
+                }
                 if (mDelegate != null) {
                     mDelegate.onAuthorizationChanged(BackgroundGeolocationFacade.AUTHORIZATION_DENIED);
                 }

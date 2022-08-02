@@ -1,5 +1,6 @@
 package com.marianhello.bgloc.provider;
 
+import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -8,12 +9,17 @@ import android.content.IntentFilter;
 import android.location.Location;
 import android.os.Bundle;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.internal.safeparcel.SafeParcelableSerializer;
 import com.google.android.gms.location.ActivityRecognition;
 import com.google.android.gms.location.ActivityRecognitionResult;
+import com.google.android.gms.location.ActivityTransition;
+import com.google.android.gms.location.ActivityTransitionEvent;
+import com.google.android.gms.location.ActivityTransitionResult;
 import com.google.android.gms.location.DetectedActivity;
 import com.google.android.gms.location.LocationListener;
 import com.google.android.gms.location.LocationRequest;
@@ -22,6 +28,7 @@ import com.marianhello.bgloc.Config;
 import com.marianhello.bgloc.data.BackgroundActivity;
 
 import java.util.ArrayList;
+import java.util.List;
 
 public class ActivityRecognitionLocationProvider extends AbstractLocationProvider implements GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener, LocationListener {
@@ -29,6 +36,7 @@ public class ActivityRecognitionLocationProvider extends AbstractLocationProvide
     private static final String TAG = ActivityRecognitionLocationProvider.class.getSimpleName();
     private static final String P_NAME = " com.marianhello.bgloc";
     private static final String DETECTED_ACTIVITY_UPDATE = P_NAME + ".DETECTED_ACTIVITY_UPDATE";
+    private static final String SIMULATE_ALARM_ACTION         = P_NAME + ".SIMULATE_ALARM_ACTION";
 
     private GoogleApiClient googleApiClient;
     private PendingIntent detectedActivitiesPI;
@@ -36,7 +44,12 @@ public class ActivityRecognitionLocationProvider extends AbstractLocationProvide
     private boolean isStarted = true;
     private boolean isTracking = false;
     private boolean isWatchingActivity = false;
+    private PendingIntent alarmPI;
+    private int numberOfEvents = 0;
     private Location lastLocation;
+
+    private AlarmManager alarmManager;
+
     private DetectedActivity lastActivity = new DetectedActivity(DetectedActivity.UNKNOWN, 100);
 
     public ActivityRecognitionLocationProvider(Context context) {
@@ -51,6 +64,9 @@ public class ActivityRecognitionLocationProvider extends AbstractLocationProvide
         Intent detectedActivitiesIntent = new Intent(DETECTED_ACTIVITY_UPDATE);
         detectedActivitiesPI = PendingIntent.getBroadcast(mContext, 9002, detectedActivitiesIntent, PendingIntent.FLAG_UPDATE_CURRENT);
         registerReceiver(detectedActivitiesReceiver, new IntentFilter(DETECTED_ACTIVITY_UPDATE));
+        alarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+        alarmPI = PendingIntent.getBroadcast(mContext, 0, new Intent(SIMULATE_ALARM_ACTION), 0);
+        registerReceiver(alarmReceiver, new IntentFilter(SIMULATE_ALARM_ACTION));
     }
 
     @Override
@@ -229,19 +245,22 @@ public class ActivityRecognitionLocationProvider extends AbstractLocationProvide
         return mostLikelyActivity;
     }
 
+    private void simulateActivity(Context context){
+        startTracking();
+    }
     private BroadcastReceiver detectedActivitiesReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             ActivityRecognitionResult result = ActivityRecognitionResult.extractResult(intent);
             ArrayList<DetectedActivity> detectedActivities = (ArrayList) result.getProbableActivities();
+            Bundle intentData = intent.getExtras();
 
             //Find the activity with the highest percentage
             lastActivity = getProbableActivity(detectedActivities);
-
             logger.debug("Detected activity={} confidence={}", BackgroundActivity.getActivityString(lastActivity.getType()), lastActivity.getConfidence());
 
             handleActivity(lastActivity);
-
+            numberOfEvents++;
             if (lastActivity.getType() == DetectedActivity.STILL) {
                 showDebugToast("Detected STILL Activity");
                 // stopTracking();
@@ -250,7 +269,22 @@ public class ActivityRecognitionLocationProvider extends AbstractLocationProvide
                 showDebugToast("Detected ACTIVE Activity");
                 startTracking();
             }
+            alarmManager.cancel(alarmPI);
+            int timeOut = 60000;
+            alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + timeOut, alarmPI); // Millisec * Second * Minute
             //else do nothing
+        }
+    };
+
+    /**
+     * Broadcast receiver which detects a user has stopped for a long enough time to be determined as STOPPED
+     */
+    private BroadcastReceiver alarmReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent)
+        {
+            logger.info("alarm fired");
+            simulateActivity(mContext);
         }
     };
 
